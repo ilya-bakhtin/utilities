@@ -373,8 +373,11 @@ void CTorMgrDlg::startTor()
 	siStartInfo.lpReserved2	= NULL;
 	siStartInfo.wShowWindow	= SW_SHOWNORMAL;
 
-	TCHAR cmd[] = _T("C:\\Program Files\\uTorrent\\uTorrent.exe");
-	LPCTSTR dir = _T("C:\\Program Files\\uTorrent");
+//	TCHAR cmd[] = _T("C:\\Program Files\\uTorrent\\uTorrent.exe");
+//	LPCTSTR dir = _T("C:\\Program Files\\uTorrent");
+	
+	TCHAR cmd[] = _T("C:\\Program Files (x86)\\uTorrent\\uTorrent.exe");
+	LPCTSTR dir = _T("C:\\Program Files (x86)\\uTorrent");
 
 	if (CreateProcess(NULL, cmd, NULL, NULL, FALSE, 0, NULL, dir, &siStartInfo, &piProcInfo))
 	{
