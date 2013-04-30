@@ -19,9 +19,13 @@ namespace FindDuplicates
             listView1.Columns.Add("File name", 300);
             last_dir_label.Text = "";
             
-            jpg_avi = new String [2];
+            jpg_avi = new String [6];
             jpg_avi[0] = ".avi";
             jpg_avi[1] = ".jpg";
+            jpg_avi[2] = ".mpg";
+            jpg_avi[3] = ".thm";
+            jpg_avi[2] = ".mp4";
+            jpg_avi[3] = ".3gp";
         }
 
         private String last_dir = "";
@@ -64,7 +68,7 @@ namespace FindDuplicates
 
         private void iterate_tree(String path, String[] exts)
         {
-            iterate_tree(path, exts, false, false, null, false);
+            iterate_tree(path, exts, true, false, null, false);
         }
 
         private MultiMap<string, FileInfo> iterate_tree(String path, String[] exts, bool ignore_hardcoded_exclusions, bool show_all, 
@@ -88,13 +92,23 @@ namespace FindDuplicates
             {
                 if (show_all || files[key].Count > 1)
                 {
-                    string s = "";
+                    MultiMap<long, FileInfo> groupped = new MultiMap<long, FileInfo>();
+
                     foreach (FileInfo f in files[key])
                     {
-                        listView1.Items.Add(f.FullName);
-                        s += f.FullName + " " + f.Length + "\n";
+                        groupped.Add(f.Length, f);
                     }
-                    listView1.Items.Add("");
+                    foreach (long len in groupped.Keys)
+                    {
+                        if (show_all || groupped[len].Count > 1)
+                        {
+                            foreach (FileInfo f in groupped[len])
+                            {
+                                listView1.Items.Add(f.FullName + " " + f.Length);
+                            }
+                            listView1.Items.Add("");
+                        }
+                    }
                 }
             }
 
@@ -137,6 +151,57 @@ namespace FindDuplicates
                 {
                     w.WriteLine(i.Text);
                 }
+                w.Flush();
+                f.Close();
+            }
+        }
+
+        private void listView1_MouseUp(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Right)
+                return;
+
+            if (!(sender is System.Windows.Forms.ListView))
+                return;
+
+            System.Windows.Forms.ListView list = (System.Windows.Forms.ListView)sender;
+
+            if (list == null)
+                return; // ???
+
+            ListViewHitTestInfo info = list.HitTest(e.X, e.Y);
+
+            if (info.Item == null)
+                return;
+
+            string dir = info.Item.Text;
+
+            int p = dir.LastIndexOf('\\');
+
+            if (p == -1)
+                return;
+
+            dir = dir.Substring(0, p);
+
+            SaveFileDialog dlg = new SaveFileDialog();
+            if (dlg.ShowDialog(this) == DialogResult.OK)
+            {
+                Stream f = dlg.OpenFile();
+                StreamWriter w = new StreamWriter(f, Encoding.GetEncoding(1251));
+                foreach (ListViewItem i in list.Items)
+                {
+                    string dir1 = i.Text;
+                    int p1 = dir1.LastIndexOf('\\');
+                    if (p1 != -1 && dir == dir1.Substring(0, p1))
+                    {
+                        int p2 = dir1.LastIndexOf(' ');
+                        if (p2 != -1)
+                        {
+                            w.WriteLine("del " + i.Text.Substring(0, p2));
+                        }
+                    }
+                }
+                w.Flush();
                 f.Close();
             }
         }
