@@ -325,7 +325,8 @@ bool FsIterator::calculate_hash(__int64& size, const std::string& path, md5_hash
 {
     const tstring wpath = string_utils::to_tstring(path.c_str(), CP_UTF8);
 
-    HANDLE file = ::CreateFile(wpath.c_str(), GENERIC_READ, FILE_SHARE_READ|FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    HANDLE file = ::CreateFile(wpath.c_str(), GENERIC_READ, FILE_SHARE_READ|FILE_SHARE_WRITE, NULL,
+                               OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_SEQUENTIAL_SCAN, NULL);
     if (file == INVALID_HANDLE_VALUE)
     {
         const DWORD error = ::GetLastError();
