@@ -14,6 +14,7 @@
 #include <iostream>
 #include <iterator>
 #include <map>
+#include <regex>
 #include <set>
 #include <string>
 #include <vector>
@@ -264,7 +265,7 @@ bool obtain_backup_priviledge()
 
 struct FileKey
 {
-    __int64 size_;
+    unsigned __int64 size_;
     md5_hash hash_;
 
     bool operator < (const FileKey& other) const
@@ -280,6 +281,11 @@ struct FileKey
 
 struct FileDesc
 {
+    FileDesc(const std::string& name = std::string(), const std::string& path = std::string()) :
+        name_(name),
+        path_(path)
+    {}
+
     std::string name_;
     std::string path_;
 };
@@ -379,7 +385,7 @@ bool FsIterator::calculate_hash(__int64& size, const std::string& path, md5_hash
 void FsIterator::add_file(__int64 size, const std::string& name, const std::string& path, const md5_hash& hash)
 {
     const FileKey key = {size, hash};
-    FileDesc fd = {name, path};
+    FileDesc fd(name, path);
 
     files_.insert(std::pair<FileKey, FileDesc>(key, fd));
 }
@@ -391,7 +397,7 @@ void FsIterator::print_results(const Files& result)
         static const size_t hash_size = sizeof(mmci->first.hash_.hash)/sizeof(mmci->first.hash_.hash[0]);
         char hash[hash_size*2 + 1];
         for (int i = 0; i < hash_size; ++i)
-            sprintf(hash + i*2, "%02X", mmci->first.hash_.hash[i]);
+            _snprintf_s(hash + i*2, sizeof(hash) - i*2, sizeof(hash) - 1, "%02X", mmci->first.hash_.hash[i]);
 
         std::cout << mmci->first.size_ << " " << hash << " ";
         std::cout << "\"" << mmci->second.name_ << "\" \"" << mmci->second.path_ << "\"" << std::endl;
@@ -400,13 +406,12 @@ void FsIterator::print_results(const Files& result)
 
 void FsIterator::iterate_dir(const TCHAR* cname)
 {
-//if (files_.size() >= 1024) return;
     WIN32_FIND_DATA data;
     int next_res = 1;
 
     tstring name(cname);
     name = name + _T("\\*");
-//std::cerr << name.length() << " " << string_utils::to_ansi_string(name.c_str(), CP_UTF8) << std::endl;
+
     HANDLE hFind = ::FindFirstFile(name.c_str(), &data);
     if (hFind == INVALID_HANDLE_VALUE)
     {
@@ -429,9 +434,6 @@ void FsIterator::iterate_dir(const TCHAR* cname)
             {
                 if (_tcscmp(data.cFileName, _T(".")) != 0 && _tcscmp(data.cFileName, _T("..")) != 0)
                 {
-//                    std::wcout << cname << _T("\\") << data.cFileName;
-//                    std::wcout << _T(" directory");
-//                    std::wcout << std::endl;
                     tstring name(cname);
                     name += _T("\\");
                     name += data.cFileName;
@@ -503,12 +505,132 @@ unsigned __stdcall worker(void* vfsi)
     return 0;
 }
 
+class FileMerger
+{
+public:
+    FileMerger() {}
+    ~FileMerger() {}
+
+    int merge_data(int argc, TCHAR* argv[]);
+
+private:
+    void process_file(TCHAR* name);
+
+    FsIterator::Files files_;
+};
+
+int FileMerger::merge_data(int argc, TCHAR* argv[])
+{
+    if (argc <= 2)
+        return 0;
+
+    for (int i = 1; i < argc; ++i)
+        process_file(argv[i]);
+
+    FsIterator::print_results(files_);
+
+    return 0;
+}
+
+void FileMerger::process_file(TCHAR* name)
+{
+    std::ifstream ifile;
+    ifile.open(name);
+
+    if (!ifile.is_open())
+    {
+        std::wcerr << _T("file \"") << name << _T("\" could not be open") << std::endl;
+        return;
+    }
+
+    std::string cname = string_utils::to_ansi_string(name, CP_UTF8);
+    size_t pos = cname.rfind(".txt");
+    if (pos != std::string::npos)
+        cname = cname.substr(0, pos);
+
+    std::cerr << "processing \"" << cname << "\"" << std::endl;
+
+    while (!ifile.eof())
+    {
+        std::string str;
+        std::getline(ifile, str);
+
+        if (str.length() == 0)
+            continue;
+
+        std::regex regex("\"([^\"]*)\"|(\\S+)");
+        std::sregex_iterator begin = std::sregex_iterator(str.begin(), str.end(), regex);
+        std::sregex_iterator end = std::sregex_iterator();
+
+        std::vector<std::string> file_properties;
+
+        for (std::sregex_iterator i = begin; i != end; ++i) {
+            std::smatch match = *i;
+            const std::string match_str = match.str();
+            file_properties.push_back(match_str);
+//            std::cout << match_str << '\n';
+        }
+
+        if (file_properties.size() != 4)
+            std::cerr << "potentially wrong line \"" << str << "\"" << std::endl;
+        else
+        {
+            unsigned __int64 size = 0;
+            if (sscanf_s(file_properties[0].c_str(), "%llu", &size) != 1)
+                std::cerr << "unable to scan size from \"" << str << "\n" << std::endl;
+
+            md5_hash hash;
+//            memset(hash.hash, '0', sizeof(hash.hash));
+            size_t hash_size = sizeof(hash.hash) / sizeof(hash.hash[0]);
+            if (file_properties[1].length() != hash_size*2)
+                std::cerr << "unable to scan hash (invalid length) from \"" << str << "\n" << std::endl;
+            else
+            {
+                for (size_t i = 0; i < hash_size; ++i)
+                {
+                    const std::string sb = file_properties[1].substr(i*2, 2);
+                    int b = 0;
+                    if (sscanf_s(sb.c_str(), "%02X", &b) != 1)
+                        std::cerr << "unable to scan hash (invalid bytes) from \"" << str << "\n" << std::endl;
+
+                    hash.hash[i] = b;
+                }
+            }
+
+            std::string name = file_properties[2];
+            if (name.length() > 0 && name[0] == '"')
+                name = name.substr(1);
+            if (name.length() > 0 && name[name.length() - 1] == '"')
+                name = name.substr(0, name.length() - 1);
+
+            std::string path = file_properties[3];
+            if (path.length() > 0 && path[0] == '"')
+                path = path.substr(1);
+            if (path.length() > 0 && path[path.length() - 1] == '"')
+                path = path.substr(0, path.length() - 1);
+
+            if (path.substr(0, 4) == "\\\\?\\")
+                path = "\\\\" + cname + path.substr(3);
+
+            const FileKey key = {size, hash};
+            const FileDesc desc(name, path);
+            files_.insert(std::pair<FileKey, FileDesc>(key, desc));
+        }
+    }
+}
+
 int _tmain(int argc, _TCHAR* argv[])
 {
     if (argc < 2)
     {
-        std::wcerr << _T("please specify configuration file name") << std::endl;
+        std::wcerr << _T("please specify configuration file name or names of files to merge") << std::endl;
         return 1;
+    }
+
+    if (argc > 2)
+    {
+        FileMerger fm;
+        return fm.merge_data(argc, argv);
     }
 
     obtain_backup_priviledge();
@@ -525,11 +647,8 @@ int _tmain(int argc, _TCHAR* argv[])
             break;
         std::wcerr << thread_n << _T(":");
         for (std::vector<tstring>::const_iterator ci = dirs.begin(); ci != dirs.end(); ++ci)
-        {
             std::wcerr << _T(" ") << ci->c_str();
-//            std::wcerr << ci->dir_.c_str() << std::endl;
-//            fsi.iterate_dir(ci->dir_.c_str());
-        }
+
         std::wcerr << std::endl;
         FsIterator fsi(dirs, thread_n);
         vec_fsi.push_back(fsi);
@@ -541,7 +660,6 @@ int _tmain(int argc, _TCHAR* argv[])
 
     for (size_t i = 0; i < thrd_num; ++i)
     {
-//        args[i].proc_ = &procs[i];
         threads[i] = reinterpret_cast<HANDLE>(_beginthreadex(NULL, 0, worker, &vec_fsi[i], 0, NULL));
         if (threads[i] == NULL)
         {
