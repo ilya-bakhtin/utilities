@@ -305,8 +305,8 @@ public:
     void merge_maps(Files& result) const;
 private:
     void iterate_dir(const TCHAR* cname);
-    void add_file(__int64 size, const std::string& name, const std::string& path, const md5_hash& hash);
-    bool calculate_hash(__int64& size, const std::string& path, md5_hash& hash) const;
+    void add_file(unsigned __int64 size, const std::string& name, const std::string& path, const md5_hash& hash);
+    bool calculate_hash(unsigned __int64& size, const std::string& path, md5_hash& hash) const;
     
     std::vector<tstring> directories_;
     int seq_;
@@ -327,7 +327,7 @@ int FsIterator::get_seq() const
     return seq_;
 }
 
-bool FsIterator::calculate_hash(__int64& size, const std::string& path, md5_hash& hash) const
+bool FsIterator::calculate_hash(unsigned __int64& size, const std::string& path, md5_hash& hash) const
 {
     const tstring wpath = string_utils::to_tstring(path.c_str(), CP_UTF8);
 
@@ -382,7 +382,7 @@ bool FsIterator::calculate_hash(__int64& size, const std::string& path, md5_hash
     return true;
 }
 
-void FsIterator::add_file(__int64 size, const std::string& name, const std::string& path, const md5_hash& hash)
+void FsIterator::add_file(unsigned __int64 size, const std::string& name, const std::string& path, const md5_hash& hash)
 {
     const FileKey key = {size, hash};
     FileDesc fd(name, path);
@@ -444,7 +444,7 @@ void FsIterator::iterate_dir(const TCHAR* cname)
             {
                 std::string name = string_utils::to_ansi_string(data.cFileName, CP_UTF8);
                 std::string path = string_utils::to_ansi_string(cname, CP_UTF8) + "\\" + name;
-                const __int64 size = (((__int64)data.nFileSizeHigh) << 32) | data.nFileSizeLow;
+                const unsigned __int64 size = (((unsigned __int64)data.nFileSizeHigh) << 32) | data.nFileSizeLow;
 
                 static const md5_hash zero_hash = {0,};
                 add_file(size, name, path, zero_hash);
@@ -470,7 +470,7 @@ void FsIterator::calculate_hashes()
     {
         md5_hash hash = {0,};
 
-        __int64 size = i->first.size_;
+        unsigned __int64 size = i->first.size_;
         if (!calculate_hash(size, i->second.path_, hash))
             ++skipped;
 
