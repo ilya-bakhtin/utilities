@@ -51,9 +51,9 @@ class Config
 {
 public:
     const std::vector<tstring> get_directories(int thread_n);
-    void add_dir(const TCHAR* dir_name, const std::set<int>& drives);
     virtual void initialize() = 0;
 protected:
+    void add_dir(const TCHAR* dir_name, const std::set<int>& drives);
     std::vector<DirectoryDesc> directories_to_scan_;
 };
 
@@ -266,28 +266,78 @@ bool obtain_backup_priviledge()
 struct FileKey
 {
     unsigned __int64 size_;
+    unsigned __int64 peer_size_;
     md5_hash hash_;
+    std::string path_;
+
+    enum KeyType
+    {
+        merge,
+        merge_after_diff,
+        diff
+    };
+
+    KeyType type_;
+    size_t path_pos_;
+
+    FileKey(unsigned __int64 size, const md5_hash& hash, const std::string& path, KeyType type) :
+        size_(size),
+        peer_size_(0),
+        hash_(hash),
+        path_(path),
+        type_(type),
+        path_pos_(string_utils::find_nth_char(path, '\\', 3))
+    {}
 
     bool operator < (const FileKey& other) const
     {
-        if (size_ < other.size_)
+        if (type_ == merge || type_ == merge_after_diff)
+        {
+            const unsigned __int64 size = size_ > peer_size_ ? size_ : peer_size_;
+            const unsigned __int64 other_size = other.size_ > other.peer_size_ ? other.size_ : other.peer_size_;
+
+            if (size < other_size)
+                return true;
+            else if (size > other_size)
+                return false;
+            else if (type_ == merge)
+            {
+                const int mr = memcmp(hash_.hash, other.hash_.hash, sizeof(hash_.hash));
+                if (mr < 0)
+                    return true;
+                else if (mr > 0)
+                    return false;
+            }
+        }
+
+        if (path_pos_ == std::string::npos)
+        {
+            // malformed
             return true;
-        else if (size_ > other.size_)
+        }
+        if (other.path_pos_ == std::string::npos)
+        {
+            // malformed
+            return false;
+        }
+
+        const int cr = path_.compare(path_pos_, std::string::npos,  other.path_, other.path_pos_, std::string::npos);
+        if (cr < 0)
+            return true;
+        else if (cr > 0)
             return false;
 
-        return memcmp(hash_.hash, other.hash_.hash, sizeof(hash_.hash)) < 0;
+        return path_.compare(0, path_pos_, other.path_, 0, other.path_pos_) < 0;
     }
 };
 
 struct FileDesc
 {
-    FileDesc(const std::string& name = std::string(), const std::string& path = std::string()) :
-        name_(name),
-        path_(path)
+    FileDesc(const std::string& name) :
+        name_(name)
     {}
 
     std::string name_;
-    std::string path_;
 };
 
 class FsIterator
@@ -384,8 +434,8 @@ bool FsIterator::calculate_hash(unsigned __int64& size, const std::string& path,
 
 void FsIterator::add_file(unsigned __int64 size, const std::string& name, const std::string& path, const md5_hash& hash)
 {
-    const FileKey key = {size, hash};
-    FileDesc fd(name, path);
+    const FileKey key(size, hash, path, FileKey::merge);
+    FileDesc fd(name);
 
     files_.insert(std::pair<FileKey, FileDesc>(key, fd));
 }
@@ -400,7 +450,7 @@ void FsIterator::print_results(const Files& result)
             _snprintf_s(hash + i*2, sizeof(hash) - i*2, sizeof(hash) - 1, "%02X", mmci->first.hash_.hash[i]);
 
         std::cout << mmci->first.size_ << " " << hash << " ";
-        std::cout << "\"" << mmci->second.name_ << "\" \"" << mmci->second.path_ << "\"" << std::endl;
+        std::cout << "\"" << mmci->second.name_ << "\" \"" << mmci->first.path_ << "\"" << std::endl;
     }
 }
 
@@ -471,10 +521,10 @@ void FsIterator::calculate_hashes()
         md5_hash hash = {0,};
 
         unsigned __int64 size = i->first.size_;
-        if (!calculate_hash(size, i->second.path_, hash))
+        if (!calculate_hash(size, i->first.path_, hash))
             ++skipped;
 
-        add_file(size, i->second.name_, i->second.path_, hash);
+        add_file(size, i->second.name_, i->first.path_, hash);
     }
 
     size_t without_sig_cnt = 0;
@@ -508,31 +558,102 @@ unsigned __stdcall worker(void* vfsi)
 class FileMerger
 {
 public:
-    FileMerger() {}
+    FileMerger() : mode_(merge_sort_hash) {}
     ~FileMerger() {}
 
     int merge_data(int argc, TCHAR* argv[]);
 
+    enum MergeType {
+        merge_sort_hash,
+        merge_sort_path,
+        diff_sort_path,
+    };
+
 private:
-    void process_file(TCHAR* name);
+    void init_filter(const TCHAR* config);
+    void process_file(const TCHAR* name);
+    void copy_different(FsIterator::Files& result) const;
+    MergeType mode_;
 
     FsIterator::Files files_;
+    std::vector<std::string> filter_;
 };
+
+void FileMerger::init_filter(const TCHAR* config)
+{
+    std::ifstream ifile;
+    ifile.open(config);
+
+    if (!ifile.is_open())
+    {
+        std::wcerr << _T("configuration \"") << config << _T("\" could not be open") << std::endl;
+        return;
+    }
+
+    while (!ifile.eof())
+    {
+        std::string str;
+        std::getline(ifile, str);
+        str = string_utils::string_trim(str);
+        if (!str.empty())
+        {
+            static const char type_prefix[] = "type=";
+            static const size_t prefix_size = sizeof(type_prefix) - 1;
+            if (str.compare(0, prefix_size, type_prefix) == 0)
+            {
+                if (str.compare(prefix_size, std::string::npos, "merge-sort-hash") == 0)
+                    mode_ = merge_sort_hash;
+                else if (str.compare(prefix_size, std::string::npos, "merge-sort-path") == 0)
+                    mode_ = merge_sort_path;
+                else if (str.compare(prefix_size, std::string::npos, "diff-sort-path") == 0)
+                    mode_ = diff_sort_path;
+            }
+            else
+            {
+                if (str[str.length() - 1] == _T('\\'))
+                    str = str.substr(0, str.length() - 1);
+
+                filter_.push_back(str);
+            }
+        }
+    }
+    ifile.close();
+}
 
 int FileMerger::merge_data(int argc, TCHAR* argv[])
 {
     if (argc <= 2)
-        return 0;
+        return 1;
 
-    for (int i = 1; i < argc; ++i)
+    int start = 1;
+
+    if (_tcscmp(argv[1], _T("--config")) == 0)
+    {
+        if (argc <= 4) {
+            std::wcerr << _T("please specify configuration file name and at least 2 names of files to merge") << std::endl;
+            return 1;
+        }
+        init_filter(argv[2]);
+        start += 2;
+    }
+
+    for (int i = start; i < argc; ++i)
         process_file(argv[i]);
+
+    if (mode_ == diff_sort_path)
+    {
+        FsIterator::Files result;
+        copy_different(result);
+        FsIterator::print_results(result);
+        return 0;
+    }
 
     FsIterator::print_results(files_);
 
     return 0;
 }
 
-void FileMerger::process_file(TCHAR* name)
+void FileMerger::process_file(const TCHAR* name)
 {
     std::ifstream ifile;
     ifile.open(name);
@@ -548,7 +669,13 @@ void FileMerger::process_file(TCHAR* name)
     if (pos != std::string::npos)
         cname = cname.substr(0, pos);
 
-    std::cerr << "processing \"" << cname << "\"" << std::endl;
+    std::cerr << "processing \"" << cname << "\"";
+
+    pos = cname.rfind("\\");
+    if (pos != std::string::npos)
+        cname = cname.substr(pos + 1);
+
+    std::cerr << " (\"" << cname << "\")" << std::endl;
 
     while (!ifile.eof())
     {
@@ -612,10 +739,67 @@ void FileMerger::process_file(TCHAR* name)
             if (path.substr(0, 4) == "\\\\?\\")
                 path = "\\\\" + cname + path.substr(3);
 
-            const FileKey key = {size, hash};
-            const FileDesc desc(name, path);
-            files_.insert(std::pair<FileKey, FileDesc>(key, desc));
+            bool match = filter_.empty();
+            for (std::vector<std::string>::const_iterator i = filter_.begin(); !match && i < filter_.end(); ++i)
+            {
+                if (path.size() >= i->size() && path.compare(0, i->size(), *i) == 0)
+                    match = true;
+            }
+            if (match)
+            {
+                const FileKey key(size, hash, path, (mode_ == merge_sort_hash ? FileKey::merge : FileKey::diff));
+                const FileDesc desc(name);
+                files_.insert(std::pair<FileKey, FileDesc>(key, desc));
+            }
         }
+    }
+}
+
+void FileMerger::copy_different(FsIterator::Files& result) const
+{
+    for (FsIterator::Files::const_iterator i = files_.begin(); i != files_.end(); ++i)
+    {
+        FsIterator::Files::const_iterator n = i;
+        ++n;
+        int what_to_copy = 0;
+        if (n == files_.end())
+            what_to_copy = 1;
+        else
+        {
+            if (i->first.path_pos_ == std::string::npos)
+                what_to_copy = 1;
+            else
+            {
+                if (n->first.path_pos_ == std::string::npos)
+                    what_to_copy = 2;
+                else
+                {
+                    if (i->first.path_.compare(i->first.path_pos_, std::string::npos, n->first.path_, n->first.path_pos_, std::string::npos) != 0)
+                        what_to_copy = 1;
+                    else if (i->first.size_ != n->first.size_ || memcmp(i->first.hash_.hash, n->first.hash_.hash, sizeof(i->first.hash_.hash)) != 0)
+                        what_to_copy = 2;
+                    else if (mode_ == merge_sort_path)
+                        what_to_copy = 2;
+                }
+            }
+        }
+        if (what_to_copy > 0)
+        {
+            std::pair<FileKey, FileDesc> entry(i->first, i->second);
+            entry.first.type_ = FileKey::merge_after_diff;
+            if (what_to_copy > 1)
+                entry.first.peer_size_ = n->first.size_;
+            result.insert(entry);
+        }
+        if (what_to_copy > 1)
+        {
+            std::pair<FileKey, FileDesc> entry(n->first, n->second);
+            entry.first.type_ = FileKey::merge_after_diff;
+            entry.first.peer_size_ = i->first.size_;
+            result.insert(entry);
+        }
+        if (what_to_copy == 0 || what_to_copy == 2)
+            i = n;
     }
 }
 

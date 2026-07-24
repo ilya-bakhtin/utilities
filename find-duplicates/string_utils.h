@@ -26,6 +26,8 @@ tstring pr_time();
 int parse_number(std::string& expr, int& res);
 std::string get_word(const std::string& str, const char* extra_break_symbols = NULL);
 
+size_t find_nth_char(const std::string& text, char value, size_t n);
+
 // TODO we need some header for these kind things
 class fclose_guard
 {

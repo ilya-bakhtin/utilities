@@ -242,6 +242,26 @@ std::string get_word(const std::string& str, const char* extra_break_symbols)
 				ebs.find(str[i]) == std::string::npos; ++i) {}
 	return str.substr(0,i);
 }
+
+size_t find_nth_char(const std::string& text, char value, size_t n)
+{
+	if (n == 0)
+		return std::string::npos;
+
+	size_t pos = 0;
+
+	for (size_t i = 0; i <= n; ++i)
+	{
+		pos = text.find(value, pos);
+		if (pos == std::string::npos)
+			return std::string::npos;
+
+		++pos;
+	}
+
+	return pos - 1;
+}
+
 /*
 tstring pr_time()
 {
