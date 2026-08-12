@@ -740,14 +740,20 @@ void FileMerger::process_file(const TCHAR* name)
                 path = "\\\\" + cname + path.substr(3);
 
             bool match = filter_.empty();
+            size_t path_pos = std::string::npos;
             for (std::vector<std::string>::const_iterator i = filter_.begin(); !match && i < filter_.end(); ++i)
             {
                 if (path.size() >= i->size() && path.compare(0, i->size(), *i) == 0)
+                {
                     match = true;
+                    path_pos = i->size();
+                }
             }
             if (match)
             {
-                const FileKey key(size, hash, path, (mode_ == merge_sort_hash ? FileKey::merge : FileKey::diff));
+                FileKey key(size, hash, path, (mode_ == merge_sort_hash ? FileKey::merge : FileKey::diff));
+                if (path_pos != std::string::npos)
+                    key.path_pos_ = path_pos;
                 const FileDesc desc(name);
                 files_.insert(std::pair<FileKey, FileDesc>(key, desc));
             }
@@ -784,12 +790,17 @@ void FileMerger::copy_different(FsIterator::Files& result) const
             }
         }
         if (what_to_copy > 0)
+//        if (what_to_copy == 1)
         {
+//static const size_t f = 1;
+//if (i->first.path_.size() >= filter_[f].size() && i->first.path_.compare(0, filter_[f].size(), filter_[f]) == 0)
+//{
             std::pair<FileKey, FileDesc> entry(i->first, i->second);
             entry.first.type_ = FileKey::merge_after_diff;
             if (what_to_copy > 1)
                 entry.first.peer_size_ = n->first.size_;
             result.insert(entry);
+//}
         }
         if (what_to_copy > 1)
         {
